@@ -4,6 +4,7 @@ import com.flashsale.order_service.dto.InitSaleRequest;
 import com.flashsale.order_service.dto.OrderResponse;
 import com.flashsale.order_service.dto.PlaceOrderRequest;
 import com.flashsale.order_service.service.OrderService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,18 +18,31 @@ public class OrderController {
     private final OrderService orderService;
 
     /**
-     * Place a new order.
-     * Returns 429 if rate-limited, 409 if sold out, 202 if accepted (PENDING).
+     * Hot path reservation endpoint.
+     * Accessible at both /orders/place and /orders/reserve.
      */
-    @PostMapping("/orders/place")
+    @PostMapping({"/orders/place", "/orders/reserve"})
     public ResponseEntity<OrderResponse> placeOrder(
-            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            HttpServletRequest servletRequest,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody PlaceOrderRequest request) {
-        OrderResponse response = orderService.placeOrder(request, idempotencyKey);
+
+        Long userId = (Long) servletRequest.getAttribute("userId");
+        if (userId == null) {
+            userId = 1L; // Fallback for unauthenticated direct testing if filter bypassed
+        }
+
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            idempotencyKey = java.util.UUID.randomUUID().toString();
+        }
+
+        OrderResponse response = orderService.placeOrder(userId, request, idempotencyKey);
 
         HttpStatus status = switch (response.getStatus()) {
             case "RATE_LIMITED" -> HttpStatus.TOO_MANY_REQUESTS;
             case "SOLD_OUT" -> HttpStatus.CONFLICT;
+            case "LIMIT_REACHED", "SALE_NOT_LIVE" -> HttpStatus.BAD_REQUEST;
+            case "CONFLICT" -> HttpStatus.CONFLICT;
             default -> HttpStatus.ACCEPTED;
         };
 
@@ -55,6 +69,6 @@ public class OrderController {
     @PostMapping("/admin/init")
     public ResponseEntity<String> initSale(@RequestBody InitSaleRequest request) {
         orderService.initSale(request);
-        return ResponseEntity.ok("Flash sale initialized for productId: " + request.getProductId());
+        return ResponseEntity.ok("Flash sale initialized for sale/productId: " + request.getProductId());
     }
 }

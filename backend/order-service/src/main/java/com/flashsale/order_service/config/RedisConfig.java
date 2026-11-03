@@ -25,21 +25,53 @@ public class RedisConfig {
     }
 
     /**
-     * Lua script for atomic stock decrement.
-     * Returns 1 if success, 0 if stock is exhausted.
+     * Atomic Lua script checking sale status, user limit, and inventory stock.
      *
-     * KEYS[1] = flashsale:stock:{productId}
-     * ARGV[1] = quantity to decrement
+     * KEYS[1] = flashsale:stock:{saleId}
+     * KEYS[2] = flashsale:user_orders:{saleId}:{userId}
+     * KEYS[3] = flashsale:sale:{saleId}:limit
+     * KEYS[4] = flashsale:sale:{saleId}:status
+     *
+     * ARGV[1] = quantity to reserve (typically 1)
+     *
+     * Returns:
+     *   1 = RESERVED
+     *   0 = SOLD_OUT
+     *  -1 = SALE_NOT_LIVE
+     *  -2 = LIMIT_REACHED
      */
     @Bean
     public DefaultRedisScript<Long> stockDecrementScript() {
         DefaultRedisScript<Long> script = new DefaultRedisScript<>();
         script.setScriptText("""
-                local stock = tonumber(redis.call('GET', KEYS[1]))
-                if stock == nil or stock < tonumber(ARGV[1]) then
+                -- 1. Check sale status
+                local status = redis.call('GET', KEYS[4])
+                if status ~= false and status ~= nil and status ~= 'LIVE' then
+                    return -1
+                end
+
+                local qty = tonumber(ARGV[1])
+
+                -- 2. Check per-user limit
+                local limitVal = redis.call('GET', KEYS[3])
+                local limit = limitVal and tonumber(limitVal) or 1
+                local userCountVal = redis.call('GET', KEYS[2])
+                local userCount = userCountVal and tonumber(userCountVal) or 0
+
+                if (userCount + qty) > limit then
+                    return -2
+                end
+
+                -- 3. Check inventory stock
+                local stockVal = redis.call('GET', KEYS[1])
+                local stock = stockVal and tonumber(stockVal) or 0
+                if stock < qty then
                     return 0
                 end
-                redis.call('DECRBY', KEYS[1], ARGV[1])
+
+                -- 4. Atomic decrement stock & increment user order count
+                redis.call('DECRBY', KEYS[1], qty)
+                redis.call('INCRBY', KEYS[2], qty)
                 return 1
                 """);
         script.setResultType(Long.class);

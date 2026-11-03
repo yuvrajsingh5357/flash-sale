@@ -1,16 +1,16 @@
 import { useState, useEffect, useRef, memo } from 'react'
 import { Zap } from 'lucide-react'
 
-// Isolated component — only this re-renders every second, not the parent
-const CountdownTimer = memo(function CountdownTimer({ saleStartsAt, onSaleStart }) {
+// Server-synchronized countdown timer
+const CountdownTimer = memo(function CountdownTimer({ saleStartsAt, serverOffset = 0, onSaleStart }) {
   const [timeLeft, setTimeLeft] = useState(null)
-  const prevSecondsRef = useRef(null)
   const callbackRef = useRef(onSaleStart)
   callbackRef.current = onSaleStart
 
   useEffect(() => {
     const tick = () => {
-      const diff = Math.max(0, saleStartsAt - Date.now())
+      const currentServerTime = Date.now() + serverOffset
+      const diff = Math.max(0, saleStartsAt - currentServerTime)
       setTimeLeft(diff)
       if (diff === 0) callbackRef.current?.()
     }
@@ -18,7 +18,7 @@ const CountdownTimer = memo(function CountdownTimer({ saleStartsAt, onSaleStart 
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
-  }, [saleStartsAt])
+  }, [saleStartsAt, serverOffset])
 
   if (timeLeft === null) return null
 
@@ -56,7 +56,7 @@ const CountdownTimer = memo(function CountdownTimer({ saleStartsAt, onSaleStart 
       <div className="flex items-center gap-2 mb-1">
         <Zap size={14} fill="currentColor" style={{ color: 'var(--fire)' }} />
         <span className="font-mono text-xs uppercase tracking-widest" style={{ color: 'var(--fire)' }}>
-          Sale drops in
+          Sale drops in (Server Synced)
         </span>
         <Zap size={14} fill="currentColor" style={{ color: 'var(--fire)' }} />
       </div>

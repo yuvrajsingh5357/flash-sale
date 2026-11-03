@@ -42,6 +42,24 @@ services:
     ports:
       - "6379:6379"
 
+  core-service:
+    build:
+      context: ./backend/core-service
+    container_name: core-service
+    ports:
+      - "8082:8082"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=flash-sale-super-secure-jwt-secret-key-that-is-at-least-256-bits-long-for-hmac-sha256
+    depends_on:
+      - postgres
+      - redis
+
   order-service:
     build:
       context: ./backend/order-service
@@ -49,8 +67,10 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - spring.kafka.bootstrap-servers=kafka:29092
-      - spring.data.redis.host=redis
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=flash-sale-super-secure-jwt-secret-key-that-is-at-least-256-bits-long-for-hmac-sha256
     depends_on:
       - kafka
       - redis
@@ -62,9 +82,13 @@ services:
     ports:
       - "8081:8081"
     environment:
-      - spring.kafka.bootstrap-servers=kafka:29092
-      - spring.data.redis.host=redis
-      - spring.datasource.url=jdbc:postgresql://postgres:5432/flashsale
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
     depends_on:
       - kafka
       - redis
@@ -77,4 +101,5 @@ services:
     ports:
       - "3000:80"
     depends_on:
+      - core-service
       - order-service

@@ -36,31 +36,31 @@ public class OrderListener {
         String orderId = event.getOrderId();
         log.info("Received order event: orderId={}", orderId);
 
-        // ─── 1. Idempotency check ────────────────────────────────────────────
-        // If this orderId already exists in DB, it's a duplicate Kafka message — skip.
+        // 1. Idempotency check: skip if order is already saved in PostgreSQL
         UUID id = UUID.fromString(orderId);
         if (orderRepository.existsById(id)) {
             log.warn("Duplicate message detected for orderId={}. Skipping.", orderId);
             return;
         }
 
-        // ─── 2. Persist to PostgreSQL ────────────────────────────────────────
+        // 2. Persist to PostgreSQL
         Order order = Order.builder()
                 .id(id)
-                .userId(event.getUserId())
-                .productId(event.getProductId())
-                .quantity(event.getQuantity())
+                .userId(event.getUserId() != null ? event.getUserId() : 1L)
+                .saleId(event.getSaleId() != null ? event.getSaleId() : 1L)
+                .productId(event.getProductId() != null ? event.getProductId() : 1L)
+                .quantity(event.getQuantity() != null ? event.getQuantity() : 1)
+                .unitPrice(event.getUnitPrice() != null ? event.getUnitPrice() : java.math.BigDecimal.valueOf(39999))
+                .totalAmount(event.getTotalAmount() != null ? event.getTotalAmount() : java.math.BigDecimal.valueOf(39999))
                 .status("RESERVED")
-                .createdAt(event.getCreatedAt())
                 .reservedUntil(event.getReservedUntil())
                 .build();
 
         orderRepository.save(order);
-        log.info("Order persisted to DB: orderId={}", orderId);
+        log.info("Order successfully persisted to PostgreSQL: orderId={}", orderId);
 
-        // ─── 3. Update Redis status to RESERVED ───────────────────────────────
+        // 3. Keep Redis status confirmed as RESERVED
         String redisKey = String.format(ORDER_STATUS_KEY, orderId);
         redisTemplate.opsForValue().set(redisKey, "RESERVED");
-        log.info("Redis status updated to RESERVED: orderId={}", orderId);
     }
 }

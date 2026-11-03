@@ -5,21 +5,22 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
-/**
- * The Kafka message payload published by order-service
- * and consumed by worker-service.
- */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
 public class OrderEvent {
     private String orderId;
-    private int userId;
-    private int productId;
-    private int quantity;
+    private Long userId;
+    private Long saleId;
+    private Long productId;
+    private Integer quantity;
+    private BigDecimal unitPrice;
+    private BigDecimal totalAmount;
+    private String status;
     private Instant createdAt;
     private Instant reservedUntil;
 }

@@ -1,219 +1,644 @@
 import { useState, useEffect } from 'react';
-import { Shield, Key, RefreshCw, Server, CheckCircle2, XCircle } from 'lucide-react';
+import { Shield, Package, Calendar, RefreshCw, AlertTriangle, CheckCircle, RotateCcw, ListFilter, Activity, DollarSign } from 'lucide-react';
 
-const ORDER_API = 'http://localhost:8080';
-const WORKER_API = 'http://localhost:8081';
+const CORE_API = 'http://localhost:8082';
 
-export default function AdminDashboard({ onClose }) {
-  const [adminKey, setAdminKey] = useState(localStorage.getItem('adminKey') || '');
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loginError, setLoginError] = useState('');
-  
-  const [reservations, setReservations] = useState([]);
-  const [orders, setOrders] = useState([]);
+export default function AdminDashboard({ user, token, onClose, onRefreshStorefront }) {
+  const [activeTab, setActiveTab] = useState('sales'); // 'sales', 'products', 'orders', 'audit'
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
 
-  const [productId, setProductId] = useState(2);
-  const [stock, setStock] = useState(100);
-  const [initStatus, setInitStatus] = useState('');
+  // Data
+  const [products, setProducts] = useState([]);
+  const [sales, setSales] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [selectedSaleMetrics, setSelectedSaleMetrics] = useState(null);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoginError('');
-    try {
-      const res = await fetch(`${WORKER_API}/admin/reservations`, {
-        headers: { 'X-ADMIN-KEY': adminKey }
-      });
-      if (res.ok) {
-        setIsAuthenticated(true);
-        localStorage.setItem('adminKey', adminKey);
-        fetchData(adminKey);
-      } else {
-        setLoginError('Invalid Admin Key');
-      }
-    } catch (err) {
-      setLoginError('Could not connect to Worker Service (Port 8081)');
-    }
+  // Forms
+  const [newProduct, setNewProduct] = useState({ name: '', description: '', price: '', imageUrl: '' });
+  const [newSale, setNewSale] = useState({
+    productId: '',
+    title: '',
+    startTime: '',
+    endTime: '',
+    salePrice: '',
+    stockAllocation: 100,
+    perUserLimit: 1
+  });
+
+  const authHeaders = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`
   };
 
-  const fetchData = async (key = adminKey) => {
+  const loadData = async () => {
     setLoading(true);
+    setError('');
     try {
-      const [resReq, ordReq] = await Promise.all([
-        fetch(`${WORKER_API}/admin/reservations`, { headers: { 'X-ADMIN-KEY': key } }),
-        fetch(`${WORKER_API}/admin/orders`, { headers: { 'X-ADMIN-KEY': key } })
+      const [prodRes, salesRes, ordersRes, auditRes] = await Promise.all([
+        fetch(`${CORE_API}/api/v1/products`, { headers: authHeaders }),
+        fetch(`${CORE_API}/api/v1/admin/sales`, { headers: authHeaders }),
+        fetch(`${CORE_API}/api/v1/admin/orders`, { headers: authHeaders }),
+        fetch(`${CORE_API}/api/v1/admin/audit-logs`, { headers: authHeaders })
       ]);
-      
-      if (resReq.ok && ordReq.ok) {
-        setReservations(await resReq.json());
-        setOrders(await ordReq.json());
-      } else if (resReq.status === 401 || ordReq.status === 401) {
-        setIsAuthenticated(false);
+
+      if (prodRes.ok) setProducts(await prodRes.json());
+      if (salesRes.ok) {
+        const sData = await salesRes.json();
+        setSales(sData);
+        if (sData.length > 0) {
+          fetchMetrics(sData[0].id);
+        }
       }
+      if (ordersRes.ok) setOrders(await ordersRes.json());
+      if (auditRes.ok) setAuditLogs(await auditRes.json());
     } catch (err) {
-      console.error(err);
+      setError('Failed to connect to Core Service (port 8082)');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    if (adminKey && !isAuthenticated) {
-      // Auto-try if stored in localStorage
-      fetch(`${WORKER_API}/admin/reservations`, { headers: { 'X-ADMIN-KEY': adminKey } })
-        .then(res => {
-          if (res.ok) {
-            setIsAuthenticated(true);
-            fetchData(adminKey);
-          }
-        }).catch(() => {});
+  const fetchMetrics = async (saleId) => {
+    try {
+      const res = await fetch(`${CORE_API}/api/v1/admin/sales/${saleId}/metrics`, { headers: authHeaders });
+      if (res.ok) setSelectedSaleMetrics(await res.json());
+    } catch (e) {
+      console.error(e);
     }
+  };
+
+  useEffect(() => {
+    loadData();
   }, []);
 
-  const handleInitStock = async (e) => {
+  const handleCreateProduct = async (e) => {
     e.preventDefault();
-    setInitStatus('Loading...');
+    setError('');
     try {
-      const res = await fetch(`${ORDER_API}/admin/init`, {
+      const res = await fetch(`${CORE_API}/api/v1/admin/products`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productId, stock })
+        headers: authHeaders,
+        body: JSON.stringify({
+          name: newProduct.name,
+          description: newProduct.description,
+          price: parseFloat(newProduct.price),
+          imageUrl: newProduct.imageUrl
+        })
       });
       if (res.ok) {
-        setInitStatus('Success! Stock Initialized.');
-        setTimeout(() => setInitStatus(''), 3000);
+        setSuccess('Product created successfully!');
+        setNewProduct({ name: '', description: '', price: '', imageUrl: '' });
+        loadData();
       } else {
-        setInitStatus('Failed to initialize.');
+        const err = await res.json();
+        setError(err.message || 'Failed to create product');
       }
-    } catch (err) {
-      setInitStatus('Network error.');
+    } catch (e) {
+      setError('Network error');
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('adminKey');
-    setAdminKey('');
-    setIsAuthenticated(false);
+  const handleCreateSale = async (e) => {
+    e.preventDefault();
+    setError('');
+    try {
+      const res = await fetch(`${CORE_API}/api/v1/admin/sales`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          productId: parseInt(newSale.productId),
+          title: newSale.title,
+          startTime: new Date(newSale.startTime).toISOString(),
+          endTime: new Date(newSale.endTime).toISOString(),
+          salePrice: parseFloat(newSale.salePrice),
+          stockAllocation: parseInt(newSale.stockAllocation),
+          perUserLimit: parseInt(newSale.perUserLimit)
+        })
+      });
+      if (res.ok) {
+        setSuccess('Flash sale scheduled successfully!');
+        setNewSale({ productId: '', title: '', startTime: '', endTime: '', salePrice: '', stockAllocation: 100, perUserLimit: 1 });
+        loadData();
+        onRefreshStorefront?.();
+      } else {
+        const err = await res.json();
+        setError(err.message || 'Failed to schedule sale');
+      }
+    } catch (e) {
+      setError('Network error');
+    }
   };
 
-  if (!isAuthenticated) {
-    return (
-      <div className="max-w-md mx-auto mt-20 p-8 rounded-2xl animate-slide-up" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <div className="flex flex-col items-center gap-4 mb-8">
-          <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: 'rgba(255,255,255,0.05)' }}>
-            <Shield size={24} style={{ color: 'var(--text)' }} />
-          </div>
-          <h2 className="font-display text-2xl">Admin Access</h2>
-          <p className="text-sm font-mono text-center" style={{ color: 'var(--text-muted)' }}>
-            Enter your secret key to access the flash sale engine dashboard.
-          </p>
-        </div>
+  const handleStatusChange = async (saleId, newStatus) => {
+    try {
+      const res = await fetch(`${CORE_API}/api/v1/admin/sales/${saleId}/status`, {
+        method: 'PUT',
+        headers: authHeaders,
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res.ok) {
+        setSuccess(`Sale updated to ${newStatus}`);
+        loadData();
+        onRefreshStorefront?.();
+      }
+    } catch (e) {
+      setError('Failed to update sale status');
+    }
+  };
 
-        <form onSubmit={handleLogin} className="flex flex-col gap-4">
-          <div className="relative">
-            <Key size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--text-muted)' }} />
-            <input
-              type="password"
-              placeholder="X-ADMIN-KEY"
-              value={adminKey}
-              onChange={e => setAdminKey(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 rounded-xl outline-none font-mono text-sm"
-              style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)' }}
-            />
-          </div>
-          {loginError && <p className="text-red-500 text-sm font-mono text-center">{loginError}</p>}
-          <button type="submit" className="py-3 rounded-xl font-mono text-sm tracking-widest text-black" style={{ background: 'var(--text)' }}>
-            AUTHENTICATE
-          </button>
-        </form>
-
-        <button onClick={onClose} className="w-full mt-4 py-3 font-mono text-xs tracking-widest text-center" style={{ color: 'var(--text-muted)' }}>
-          RETURN TO STORE
-        </button>
-      </div>
-    );
-  }
+  const handleRefund = async (orderId) => {
+    if (!window.confirm(`Initiate refund for order ${orderId}?`)) return;
+    try {
+      const res = await fetch(`${CORE_API}/api/v1/admin/orders/${orderId}/refund`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ reason: 'Admin dashboard refund' })
+      });
+      if (res.ok) {
+        setSuccess(`Order ${orderId.slice(0, 8)}... refunded successfully!`);
+        loadData();
+      } else {
+        const err = await res.json();
+        setError(err.message || 'Refund failed');
+      }
+    } catch (e) {
+      setError('Network error initiating refund');
+    }
+  };
 
   return (
-    <div className="max-w-4xl mx-auto mt-8 p-6 animate-slide-up">
-      <div className="flex items-center justify-between mb-8 pb-6 border-b" style={{ borderColor: 'var(--border)' }}>
-        <div className="flex items-center gap-3">
-          <Server size={24} style={{ color: '#00FF88' }} />
-          <h1 className="font-display text-3xl">Control Panel</h1>
-        </div>
-        <div className="flex gap-4">
-          <button onClick={() => fetchData()} className="flex items-center gap-2 px-4 py-2 rounded font-mono text-xs" style={{ background: 'var(--surface-2)' }}>
-            <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> REFRESH
-          </button>
-          <button onClick={logout} className="px-4 py-2 rounded font-mono text-xs text-red-400" style={{ background: 'var(--surface-2)' }}>
-            LOGOUT
-          </button>
-          <button onClick={onClose} className="px-4 py-2 rounded font-mono text-xs" style={{ background: 'var(--text)', color: 'black' }}>
-            EXIT
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div className="p-6 rounded-2xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          <h3 className="font-mono text-xs tracking-widest mb-4" style={{ color: 'var(--text-muted)' }}>INITIALIZE STOCK (PORT 8080)</h3>
-          <form onSubmit={handleInitStock} className="flex flex-col gap-3">
-            <div className="flex gap-2">
-              <input type="number" placeholder="Product ID" value={productId} onChange={e => setProductId(e.target.value)} className="w-1/2 p-2 rounded font-mono text-sm" style={{ background: 'var(--surface-2)', color: 'white' }} />
-              <input type="number" placeholder="Stock" value={stock} onChange={e => setStock(e.target.value)} className="w-1/2 p-2 rounded font-mono text-sm" style={{ background: 'var(--surface-2)', color: 'white' }} />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
+      <div className="bg-[#12131a] border border-[#232738] rounded-2xl w-full max-w-6xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden text-gray-200">
+        
+        {/* Header */}
+        <div className="p-5 border-b border-[#232738] flex items-center justify-between bg-[#171924]">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-500/10 text-amber-400 rounded-lg border border-amber-500/20">
+              <Shield size={22} />
             </div>
-            <button type="submit" className="w-full py-2 rounded font-mono text-sm bg-white text-black">SET IN REDIS</button>
-            {initStatus && <p className="font-mono text-xs text-center mt-2" style={{ color: '#00FF88' }}>{initStatus}</p>}
-          </form>
+            <div>
+              <h2 className="font-display text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                Merchant Operations Hub
+                <span className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20 font-mono">
+                  {user?.role}
+                </span>
+              </h2>
+              <p className="text-xs text-gray-400">Single-Merchant Flash Sale Engine Administration</p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            <button
+              onClick={loadData}
+              disabled={loading}
+              className="p-2 rounded-lg bg-[#232738] hover:bg-[#2d3248] text-gray-300 transition-colors"
+              title="Refresh Data"
+            >
+              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            </button>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 text-xs font-semibold"
+            >
+              Close
+            </button>
+          </div>
         </div>
 
-        <div className="p-6 rounded-2xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          <h3 className="font-mono text-xs tracking-widest mb-2" style={{ color: 'var(--text-muted)' }}>ACTIVE RESERVATIONS</h3>
-          <p className="font-display text-5xl" style={{ color: 'var(--fire)' }}>{reservations.length}</p>
-          <p className="font-mono text-xs mt-2" style={{ color: 'var(--text-muted)' }}>Awaiting expiration or payment</p>
-        </div>
-
-        <div className="p-6 rounded-2xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          <h3 className="font-mono text-xs tracking-widest mb-2" style={{ color: 'var(--text-muted)' }}>TOTAL ORDERS</h3>
-          <p className="font-display text-5xl">{orders.length}</p>
-          <p className="font-mono text-xs mt-2" style={{ color: 'var(--text-muted)' }}>All time historical</p>
-        </div>
-      </div>
-
-      <div className="p-6 rounded-2xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <h3 className="font-mono text-xs tracking-widest mb-4" style={{ color: 'var(--text-muted)' }}>RECENT ORDERS (DB / PORT 8081)</h3>
-        {orders.length === 0 ? (
-          <p className="font-mono text-sm" style={{ color: 'var(--text-muted)' }}>No orders in database yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left font-mono text-sm border-collapse">
-              <thead>
-                <tr style={{ color: 'var(--text-muted)' }}>
-                  <th className="pb-3 border-b border-gray-800">Order ID</th>
-                  <th className="pb-3 border-b border-gray-800">User ID</th>
-                  <th className="pb-3 border-b border-gray-800">Status</th>
-                  <th className="pb-3 border-b border-gray-800">Reserved Until</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.slice().reverse().slice(0, 10).map(o => (
-                  <tr key={o.id}>
-                    <td className="py-3 border-b border-gray-800 truncate max-w-[150px]" title={o.id}>{o.id}</td>
-                    <td className="py-3 border-b border-gray-800">{o.userId}</td>
-                    <td className="py-3 border-b border-gray-800">
-                      <span className={`px-2 py-1 rounded text-xs ${o.status === 'RESERVED' ? 'bg-orange-900/30 text-orange-400' : o.status === 'EXPIRED' ? 'bg-red-900/30 text-red-400' : 'bg-green-900/30 text-green-400'}`}>
-                        {o.status}
-                      </span>
-                    </td>
-                    <td className="py-3 border-b border-gray-800 text-xs text-gray-500">
-                      {o.reservedUntil ? new Date(o.reservedUntil).toLocaleTimeString() : 'N/A'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {/* Alerts */}
+        {error && (
+          <div className="mx-6 mt-4 p-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-lg flex items-center gap-2">
+            <AlertTriangle size={16} />
+            <span>{error}</span>
           </div>
         )}
+        {success && (
+          <div className="mx-6 mt-4 p-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs rounded-lg flex items-center gap-2">
+            <CheckCircle size={16} />
+            <span>{success}</span>
+          </div>
+        )}
+
+        {/* Tab Navigation */}
+        <div className="flex border-b border-[#232738] px-6 bg-[#141620]">
+          {[
+            { id: 'sales', label: 'Flash Sales & Metrics', icon: Calendar },
+            { id: 'products', label: 'Catalog / Products', icon: Package },
+            { id: 'orders', label: 'Orders & Refunds', icon: ListFilter },
+            { id: 'audit', label: 'Audit Trail', icon: Activity },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => { setActiveTab(tab.id); setError(''); setSuccess(''); }}
+                className={`flex items-center gap-2 px-5 py-3.5 border-b-2 text-xs font-medium transition-all ${
+                  active
+                    ? 'border-amber-400 text-amber-400 bg-amber-500/5'
+                    : 'border-transparent text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                <Icon size={15} />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Tab Content */}
+        <div className="p-6 overflow-y-auto flex-1 space-y-6">
+          
+          {/* TAB: SALES */}
+          {activeTab === 'sales' && (
+            <div className="space-y-6">
+              
+              {/* Metrics Header if sale selected */}
+              {selectedSaleMetrics && (
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 p-4 bg-[#181a26] border border-[#272b3e] rounded-xl">
+                  <div>
+                    <span className="text-[10px] text-gray-400 uppercase tracking-wider block">Initial Stock</span>
+                    <span className="text-xl font-bold text-white font-mono">{selectedSaleMetrics.initialStock}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-emerald-400 uppercase tracking-wider block">Remaining in Redis</span>
+                    <span className="text-xl font-bold text-emerald-400 font-mono">{selectedSaleMetrics.remainingStock}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-amber-400 uppercase tracking-wider block">Active Reserved</span>
+                    <span className="text-xl font-bold text-amber-400 font-mono">{selectedSaleMetrics.reservedOrders}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-cyan-400 uppercase tracking-wider block">Paid / Confirmed</span>
+                    <span className="text-xl font-bold text-cyan-400 font-mono">{selectedSaleMetrics.paidOrders}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-red-400 uppercase tracking-wider block">Expired / Cancelled</span>
+                    <span className="text-xl font-bold text-red-400 font-mono">{selectedSaleMetrics.expiredOrders + selectedSaleMetrics.cancelledOrders}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Schedule New Sale Form */}
+              <div className="bg-[#171924] border border-[#232738] p-5 rounded-xl">
+                <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                  <Calendar size={16} className="text-amber-400" />
+                  Schedule a New Flash Sale (A3)
+                </h3>
+                <form onSubmit={handleCreateSale} className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                  <div>
+                    <label className="text-gray-400 block mb-1">Target Product</label>
+                    <select
+                      value={newSale.productId}
+                      onChange={e => setNewSale({ ...newSale, productId: e.target.value })}
+                      required
+                      className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                    >
+                      <option value="">Select a product...</option>
+                      {products.map(p => (
+                        <option key={p.id} value={p.id}>{p.name} (₹{p.price})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">Sale Event Title</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Midnight Lightning Drop"
+                      value={newSale.title}
+                      onChange={e => setNewSale({ ...newSale, title: e.target.value })}
+                      required
+                      className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">Sale Price (₹)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="39999"
+                      value={newSale.salePrice}
+                      onChange={e => setNewSale({ ...newSale, salePrice: e.target.value })}
+                      required
+                      className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">Start Time</label>
+                    <input
+                      type="datetime-local"
+                      value={newSale.startTime}
+                      onChange={e => setNewSale({ ...newSale, startTime: e.target.value })}
+                      required
+                      className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">End Time</label>
+                    <input
+                      type="datetime-local"
+                      value={newSale.endTime}
+                      onChange={e => setNewSale({ ...newSale, endTime: e.target.value })}
+                      required
+                      className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-gray-400 block mb-1">Stock Allocation</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={newSale.stockAllocation}
+                        onChange={e => setNewSale({ ...newSale, stockAllocation: e.target.value })}
+                        required
+                        className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-gray-400 block mb-1">Per-User Limit</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={newSale.perUserLimit}
+                        onChange={e => setNewSale({ ...newSale, perUserLimit: e.target.value })}
+                        required
+                        className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="sm:col-span-3 flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-lg transition-colors"
+                    >
+                      Schedule Flash Sale
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Existing Sales Table */}
+              <div className="bg-[#171924] border border-[#232738] rounded-xl overflow-hidden">
+                <div className="px-5 py-3 border-b border-[#232738] flex justify-between items-center">
+                  <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">All Scheduled Sales (A4)</h4>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#141620] text-gray-400 border-b border-[#232738]">
+                      <tr>
+                        <th className="p-3">ID</th>
+                        <th className="p-3">Title / Product</th>
+                        <th className="p-3">Price</th>
+                        <th className="p-3">Stock Left</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3">Window</th>
+                        <th className="p-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#232738]">
+                      {sales.map(s => (
+                        <tr key={s.id} className="hover:bg-[#1e2130] transition-colors">
+                          <td className="p-3 font-mono text-gray-400">#{s.id}</td>
+                          <td className="p-3 font-semibold text-white">
+                            <div>{s.title}</div>
+                            <div className="text-[10px] text-gray-400">{s.productName}</div>
+                          </td>
+                          <td className="p-3 text-emerald-400 font-mono">₹{s.salePrice}</td>
+                          <td className="p-3 font-mono">
+                            <span className="text-amber-400 font-bold">{s.remainingStock}</span> / {s.stockAllocation}
+                          </td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                              s.status === 'LIVE' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                              s.status === 'SCHEDULED' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' :
+                              'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+                            }`}>
+                              {s.status}
+                            </span>
+                          </td>
+                          <td className="p-3 text-[10px] text-gray-400">
+                            {new Date(s.startTime).toLocaleTimeString()} - {new Date(s.endTime).toLocaleTimeString()}
+                          </td>
+                          <td className="p-3 text-right space-x-2">
+                            <button
+                              onClick={() => fetchMetrics(s.id)}
+                              className="px-2 py-1 rounded bg-[#2b2f44] hover:bg-[#373c57] text-gray-300 text-[11px]"
+                            >
+                              Metrics
+                            </button>
+                            {s.status === 'SCHEDULED' && (
+                              <button
+                                onClick={() => handleStatusChange(s.id, 'LIVE')}
+                                className="px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 text-[11px] font-semibold"
+                              >
+                                Go Live
+                              </button>
+                            )}
+                            {s.status === 'LIVE' && (
+                              <button
+                                onClick={() => handleStatusChange(s.id, 'ENDED')}
+                                className="px-2 py-1 rounded bg-red-500/20 text-red-300 hover:bg-red-500/30 text-[11px] font-semibold"
+                              >
+                                End Sale
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: PRODUCTS */}
+          {activeTab === 'products' && (
+            <div className="space-y-6">
+              <div className="bg-[#171924] border border-[#232738] p-5 rounded-xl">
+                <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                  <Package size={16} className="text-amber-400" />
+                  Create New Product (A2)
+                </h3>
+                <form onSubmit={handleCreateProduct} className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div>
+                    <label className="text-gray-400 block mb-1">Product Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Sony PlayStation 5 Pro"
+                      value={newProduct.name}
+                      onChange={e => setNewProduct({ ...newProduct, name: e.target.value })}
+                      required
+                      className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 block mb-1">Base Price (₹)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="54999.00"
+                      value={newProduct.price}
+                      onChange={e => setNewProduct({ ...newProduct, price: e.target.value })}
+                      required
+                      className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="text-gray-400 block mb-1">Image URL</label>
+                    <input
+                      type="url"
+                      placeholder="https://..."
+                      value={newProduct.imageUrl}
+                      onChange={e => setNewProduct({ ...newProduct, imageUrl: e.target.value })}
+                      className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="text-gray-400 block mb-1">Description</label>
+                    <textarea
+                      rows="2"
+                      placeholder="Product specifications and details..."
+                      value={newProduct.description}
+                      onChange={e => setNewProduct({ ...newProduct, description: e.target.value })}
+                      className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
+                    />
+                  </div>
+                  <div className="sm:col-span-2 flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-lg"
+                    >
+                      Save Product
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Product Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {products.map(p => (
+                  <div key={p.id} className="bg-[#171924] border border-[#232738] rounded-xl overflow-hidden p-4 flex flex-col justify-between">
+                    <div>
+                      {p.imageUrl && (
+                        <img src={p.imageUrl} alt={p.name} className="w-full h-32 object-cover rounded-lg mb-3" />
+                      )}
+                      <h4 className="font-bold text-white text-sm">{p.name}</h4>
+                      <p className="text-xs text-gray-400 line-clamp-2 mt-1">{p.description}</p>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-[#232738] flex justify-between items-center">
+                      <span className="font-mono text-emerald-400 font-bold">₹{p.price}</span>
+                      <span className="text-[10px] text-gray-500 font-mono">ID: #{p.id}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* TAB: ORDERS & REFUNDS */}
+          {activeTab === 'orders' && (
+            <div className="space-y-4">
+              <div className="bg-[#171924] border border-[#232738] rounded-xl overflow-hidden">
+                <div className="px-5 py-3 border-b border-[#232738] flex justify-between items-center">
+                  <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">All Customer Orders & Refunds (A6)</h4>
+                  <span className="text-xs text-gray-400 font-mono">Total Orders: {orders.length}</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#141620] text-gray-400 border-b border-[#232738]">
+                      <tr>
+                        <th className="p-3">Order ID</th>
+                        <th className="p-3">Product</th>
+                        <th className="p-3">User</th>
+                        <th className="p-3">Amount</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3">Created</th>
+                        <th className="p-3 text-right">Refund Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#232738]">
+                      {orders.map(o => (
+                        <tr key={o.id} className="hover:bg-[#1e2130] transition-colors">
+                          <td className="p-3 font-mono text-gray-400">{o.id.slice(0, 8)}...</td>
+                          <td className="p-3 font-semibold text-white">{o.productName}</td>
+                          <td className="p-3 text-gray-400 font-mono">User #{o.userId}</td>
+                          <td className="p-3 font-mono text-emerald-400">₹{o.totalAmount}</td>
+                          <td className="p-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                              o.status === 'PAID' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                              o.status === 'RESERVED' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                              o.status === 'REFUNDED' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' :
+                              'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+                            }`}>
+                              {o.status}
+                            </span>
+                          </td>
+                          <td className="p-3 text-[10px] text-gray-400">
+                            {new Date(o.createdAt).toLocaleString()}
+                          </td>
+                          <td className="p-3 text-right">
+                            {o.status === 'PAID' ? (
+                              <button
+                                onClick={() => handleRefund(o.id)}
+                                className="px-3 py-1 rounded bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 text-[11px] font-semibold border border-purple-500/30"
+                              >
+                                Refund (A6)
+                              </button>
+                            ) : (
+                              <span className="text-[10px] text-gray-500">N/A</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: AUDIT TRAIL */}
+          {activeTab === 'audit' && (
+            <div className="bg-[#171924] border border-[#232738] rounded-xl overflow-hidden">
+              <div className="px-5 py-3 border-b border-[#232738]">
+                <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">System & Admin Audit Logs (A7)</h4>
+              </div>
+              <div className="divide-y divide-[#232738] max-h-[500px] overflow-y-auto font-mono text-xs">
+                {auditLogs.length === 0 ? (
+                  <div className="p-8 text-center text-gray-500">No audit logs recorded yet.</div>
+                ) : (
+                  auditLogs.map(log => (
+                    <div key={log.id} className="p-3.5 hover:bg-[#1a1c28] flex items-center justify-between">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+                            {log.action}
+                          </span>
+                          <span className="text-gray-300 text-xs font-sans font-semibold">
+                            {log.entityType} {log.entityId ? `#${log.entityId.slice(0, 8)}` : ''}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-gray-400 font-sans">{log.details}</p>
+                      </div>
+                      <div className="text-right text-[10px] text-gray-500">
+                        <div>User: {log.userId ? `#${log.userId}` : 'SYSTEM'}</div>
+                        <div>{new Date(log.createdAt).toLocaleTimeString()}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+        </div>
       </div>
     </div>
   );

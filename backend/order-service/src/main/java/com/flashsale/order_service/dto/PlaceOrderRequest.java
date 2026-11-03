@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PlaceOrderRequest {
-    private int userId;
-    private int productId;
-    private int quantity;
+    private Long saleId;
+    private Long productId;
+    private Integer quantity;
 }
