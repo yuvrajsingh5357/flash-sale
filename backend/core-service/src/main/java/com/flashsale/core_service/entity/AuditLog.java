@@ -3,6 +3,8 @@ package com.flashsale.core_service.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 
@@ -31,7 +33,8 @@ public class AuditLog {
     @Column(name = "entity_id")
     private String entityId;
 
-    @Column(columnDefinition = "TEXT")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
     private String details;
 
     @Column(name = "ip_address", length = 50)

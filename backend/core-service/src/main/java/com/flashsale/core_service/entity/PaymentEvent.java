@@ -3,6 +3,8 @@ package com.flashsale.core_service.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 
@@ -25,7 +27,8 @@ public class PaymentEvent {
     @Column(nullable = false, length = 50)
     private String provider;
 
-    @Column(columnDefinition = "TEXT", nullable = false)
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb", nullable = false)
     private String payload;
 
     @CreationTimestamp
