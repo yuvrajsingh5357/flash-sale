@@ -1,0 +1,131 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --fire: #FF3C00;
+  --fire-dim: rgba(255, 60, 0, 0.15);
+  --bg: #0A0A0A;
+  --surface: #111111;
+  --surface-2: #1A1A1A;
+  --border: rgba(255,255,255,0.07);
+  --text: #F0EDE8;
+  --text-muted: #666;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Scanline overlay effect */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Noise texture */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9998;
+}
+
+.font-display { font-family: 'Bebas Neue', sans-serif; }
+.font-mono { font-family: 'DM Mono', monospace; }
+.font-body { font-family: 'DM Sans', sans-serif; }
+
+/* Digit flip animation for countdown */
+.digit-flip {
+  display: inline-block;
+  animation: ticker 0.3s ease-in-out;
+}
+
+@keyframes ticker {
+  0% { transform: translateY(-100%); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes confettiFall {
+  0% { transform: translateY(-10px) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+}
+
+.confetti-piece {
+  position: fixed;
+  width: 8px;
+  height: 8px;
+  animation: confettiFall 3s ease-in forwards;
+  z-index: 1000;
+}
+
+/* Buy button fire glow */
+.btn-fire {
+  background: var(--fire);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.btn-fire::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.15) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.btn-fire:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(255, 60, 0, 0.5), 0 0 0 1px rgba(255,60,0,0.3);
+}
+
+.btn-fire:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-fire:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Diagonal stripe background for live indicator */
+.stripes {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--fire),
+    var(--fire) 6px,
+    transparent 6px,
+    transparent 14px
+  );
+}
+
+.animate-slide-up {
+  animation: slideUp 0.4s ease-out forwards;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
