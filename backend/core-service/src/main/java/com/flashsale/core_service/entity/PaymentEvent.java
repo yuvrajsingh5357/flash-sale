@@ -27,8 +27,7 @@ public class PaymentEvent {
     @Column(nullable = false, length = 50)
     private String provider;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb", nullable = false)
+    @Column(columnDefinition = "TEXT", nullable = false)
     private String payload;
 
     @CreationTimestamp

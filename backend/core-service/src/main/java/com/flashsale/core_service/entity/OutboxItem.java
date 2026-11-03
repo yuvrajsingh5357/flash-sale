@@ -31,8 +31,7 @@ public class OutboxItem {
     @Column(name = "event_type", nullable = false, length = 100)
     private String eventType;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb", nullable = false)
+    @Column(columnDefinition = "TEXT", nullable = false)
     private String payload;
 
     @Column(nullable = false, length = 30)

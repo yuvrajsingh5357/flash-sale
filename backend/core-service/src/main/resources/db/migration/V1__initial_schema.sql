@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS payment_events (
     id BIGSERIAL PRIMARY KEY,
     event_id VARCHAR(255) NOT NULL UNIQUE,
     provider VARCHAR(50) NOT NULL,
-    payload JSONB NOT NULL,
+    payload TEXT NOT NULL,
     processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_payment_events_id ON payment_events(event_id);
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     action VARCHAR(100) NOT NULL,
     entity_type VARCHAR(50) NOT NULL,
     entity_id VARCHAR(255),
-    details JSONB,
+    details TEXT,
     ip_address VARCHAR(50),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS outbox (
     aggregate_type VARCHAR(100) NOT NULL,
     aggregate_id VARCHAR(255) NOT NULL,
     event_type VARCHAR(100) NOT NULL,
-    payload JSONB NOT NULL,
+    payload TEXT NOT NULL,
     status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
     retry_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

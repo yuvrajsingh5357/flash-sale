@@ -33,8 +33,7 @@ public class AuditLog {
     @Column(name = "entity_id")
     private String entityId;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb")
+    @Column(columnDefinition = "TEXT")
     private String details;
 
     @Column(name = "ip_address", length = 50)
