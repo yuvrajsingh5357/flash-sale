@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Shield, Package, Calendar, RefreshCw, AlertTriangle, CheckCircle, RotateCcw, ListFilter, Activity, DollarSign } from 'lucide-react';
+import { Shield, Package, Calendar, RefreshCw, AlertTriangle, CheckCircle, RotateCcw, ListFilter, Activity, Download, Database, Play, CheckCircle2 } from 'lucide-react';
 
 const CORE_API = 'http://localhost:8082';
+const WORKER_API = 'http://localhost:8081';
 
 export default function AdminDashboard({ user, token, onClose, onRefreshStorefront }) {
-  const [activeTab, setActiveTab] = useState('sales'); // 'sales', 'products', 'orders', 'audit'
+  const [activeTab, setActiveTab] = useState('sales'); // 'sales', 'products', 'orders', 'reconciliation', 'audit'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -15,6 +16,8 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
   const [orders, setOrders] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [selectedSaleMetrics, setSelectedSaleMetrics] = useState(null);
+  const [reconciliationReports, setReconciliationReports] = useState([]);
+  const [dltMessages, setDltMessages] = useState([]);
 
   // Forms
   const [newProduct, setNewProduct] = useState({ name: '', description: '', price: '', imageUrl: '' });
@@ -54,8 +57,12 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
       }
       if (ordersRes.ok) setOrders(await ordersRes.json());
       if (auditRes.ok) setAuditLogs(await auditRes.json());
-    } catch (err) {
-      setError('Failed to connect to Core Service (port 8082)');
+      
+      // Load reconciliation reports
+      fetchReconciliationReports();
+      fetchDltMessages();
+    } catch {
+      setError('Failed to connect to backend services');
     } finally {
       setLoading(false);
     }
@@ -67,6 +74,26 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
       if (res.ok) setSelectedSaleMetrics(await res.json());
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const fetchReconciliationReports = async () => {
+    try {
+      const res = await fetch(`${CORE_API}/api/v1/admin/reconciliation/report`, { headers: authHeaders });
+      if (res.ok) setReconciliationReports(await res.json());
+    } catch (e) {
+      console.error('Failed to fetch reconciliation reports', e);
+    }
+  };
+
+  const fetchDltMessages = async () => {
+    try {
+      const res = await fetch(`${WORKER_API}/admin/dlt`, {
+        headers: { 'X-ADMIN-KEY': 'super-secret' }
+      });
+      if (res.ok) setDltMessages(await res.json());
+    } catch (e) {
+      console.error('Failed to fetch DLT messages from worker', e);
     }
   };
 
@@ -96,12 +123,12 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
         const err = await res.json();
         setError(err.message || 'Failed to create product');
       }
-    } catch (e) {
+    } catch {
       setError('Network error');
     }
   };
 
-  const handleCreateSale = async (e) => {
+  const handleScheduleSale = async (e) => {
     e.preventDefault();
     setError('');
     try {
@@ -119,38 +146,38 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
         })
       });
       if (res.ok) {
-        setSuccess('Flash sale scheduled successfully!');
+        setSuccess('Sale scheduled successfully!');
         setNewSale({ productId: '', title: '', startTime: '', endTime: '', salePrice: '', stockAllocation: 100, perUserLimit: 1 });
         loadData();
-        onRefreshStorefront?.();
+        if (onRefreshStorefront) onRefreshStorefront();
       } else {
         const err = await res.json();
         setError(err.message || 'Failed to schedule sale');
       }
-    } catch (e) {
+    } catch {
       setError('Network error');
     }
   };
 
-  const handleStatusChange = async (saleId, newStatus) => {
+  const handleUpdateStatus = async (saleId, status) => {
     try {
       const res = await fetch(`${CORE_API}/api/v1/admin/sales/${saleId}/status`, {
         method: 'PUT',
         headers: authHeaders,
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify({ status })
       });
       if (res.ok) {
-        setSuccess(`Sale updated to ${newStatus}`);
+        setSuccess(`Sale status updated to ${status}`);
         loadData();
-        onRefreshStorefront?.();
+        if (onRefreshStorefront) onRefreshStorefront();
       }
-    } catch (e) {
-      setError('Failed to update sale status');
+    } catch {
+      setError('Failed to update status');
     }
   };
 
   const handleRefund = async (orderId) => {
-    if (!window.confirm(`Initiate refund for order ${orderId}?`)) return;
+    if (!confirm('Are you sure you want to trigger a refund for this order?')) return;
     try {
       const res = await fetch(`${CORE_API}/api/v1/admin/orders/${orderId}/refund`, {
         method: 'POST',
@@ -158,44 +185,79 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
         body: JSON.stringify({ reason: 'Admin dashboard refund' })
       });
       if (res.ok) {
-        setSuccess(`Order ${orderId.slice(0, 8)}... refunded successfully!`);
+        setSuccess('Refund processed successfully!');
         loadData();
       } else {
         const err = await res.json();
         setError(err.message || 'Refund failed');
       }
-    } catch (e) {
-      setError('Network error initiating refund');
+    } catch {
+      setError('Refund request failed');
+    }
+  };
+
+  const handleRebuildRedis = async (saleId) => {
+    try {
+      const res = await fetch(`${CORE_API}/api/v1/admin/sales/${saleId}/rebuild-redis`, {
+        method: 'POST',
+        headers: authHeaders
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSuccess(`Redis reconstructed for Sale #${saleId}! True stock restored: ${data.rebuiltStock}`);
+        loadData();
+      } else {
+        setError(data.message || 'Failed to rebuild Redis');
+      }
+    } catch {
+      setError('Failed to trigger Redis recovery');
+    }
+  };
+
+  const handleReplayDlt = async () => {
+    try {
+      const res = await fetch(`${WORKER_API}/admin/dlt/replay`, {
+        method: 'POST',
+        headers: { 'X-ADMIN-KEY': 'super-secret' }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSuccess(data.message || 'Replayed DLT messages successfully!');
+        fetchDltMessages();
+      } else {
+        setError('Failed to replay DLT');
+      }
+    } catch {
+      setError('Failed to reach Worker Service (port 8081)');
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
-      <div className="bg-[#12131a] border border-[#232738] rounded-2xl w-full max-w-6xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden text-gray-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+      <div className="bg-[#0f1118] border border-[#232738] rounded-2xl w-full max-w-6xl h-[92vh] flex flex-col overflow-hidden shadow-2xl">
         
-        {/* Header */}
-        <div className="p-5 border-b border-[#232738] flex items-center justify-between bg-[#171924]">
+        {/* Top Header */}
+        <div className="px-6 py-4 border-b border-[#232738] bg-[#141620] flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-500/10 text-amber-400 rounded-lg border border-amber-500/20">
-              <Shield size={22} />
+            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              <Shield size={20} />
             </div>
             <div>
-              <h2 className="font-display text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                Merchant Operations Hub
-                <span className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/20 font-mono">
-                  {user?.role}
+              <div className="flex items-center gap-2">
+                <h3 className="font-display font-bold text-white text-base">Merchant Operations Hub</h3>
+                <span className="text-[10px] font-mono font-bold bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full border border-amber-500/30">
+                  ADMIN CONSOLE
                 </span>
-              </h2>
-              <p className="text-xs text-gray-400">Single-Merchant Flash Sale Engine Administration</p>
+              </div>
+              <p className="text-xs text-gray-400">Single-Merchant Flash Sale Engine (A1-A7, S1-S7)</p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3">
             <button
               onClick={loadData}
               disabled={loading}
-              className="p-2 rounded-lg bg-[#232738] hover:bg-[#2d3248] text-gray-300 transition-colors"
-              title="Refresh Data"
+              className="p-2 rounded-lg bg-[#1e2130] text-gray-400 hover:text-white border border-[#2d3248]"
             >
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
             </button>
@@ -223,12 +285,13 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
         )}
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-[#232738] px-6 bg-[#141620]">
+        <div className="flex border-b border-[#232738] px-6 bg-[#141620] overflow-x-auto">
           {[
-            { id: 'sales', label: 'Flash Sales & Metrics', icon: Calendar },
-            { id: 'products', label: 'Catalog / Products', icon: Package },
-            { id: 'orders', label: 'Orders & Refunds', icon: ListFilter },
-            { id: 'audit', label: 'Audit Trail', icon: Activity },
+            { id: 'sales', label: 'Flash Sales & Metrics (A3-A5)', icon: Calendar },
+            { id: 'products', label: 'Catalog / Products (A2)', icon: Package },
+            { id: 'orders', label: 'Orders & Refunds (A6)', icon: ListFilter },
+            { id: 'reconciliation', label: 'Reconciliation & Recovery (S5, S6, S7)', icon: Database },
+            { id: 'audit', label: 'Audit Trail (A7)', icon: Activity },
           ].map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
@@ -236,7 +299,7 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
               <button
                 key={tab.id}
                 onClick={() => { setActiveTab(tab.id); setError(''); setSuccess(''); }}
-                className={`flex items-center gap-2 px-5 py-3.5 border-b-2 text-xs font-medium transition-all ${
+                className={`flex items-center gap-2 px-5 py-3.5 border-b-2 text-xs font-medium transition-all whitespace-nowrap ${
                   active
                     ? 'border-amber-400 text-amber-400 bg-amber-500/5'
                     : 'border-transparent text-gray-400 hover:text-gray-200'
@@ -258,46 +321,43 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
               
               {/* Metrics Header if sale selected */}
               {selectedSaleMetrics && (
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 p-4 bg-[#181a26] border border-[#272b3e] rounded-xl">
-                  <div>
-                    <span className="text-[10px] text-gray-400 uppercase tracking-wider block">Initial Stock</span>
-                    <span className="text-xl font-bold text-white font-mono">{selectedSaleMetrics.initialStock}</span>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                  <div className="bg-[#171924] border border-[#232738] p-4 rounded-xl">
+                    <span className="text-[10px] text-gray-400 block font-mono">REDIS REMAINING STOCK</span>
+                    <span className="text-xl font-mono font-extrabold text-amber-400">{selectedSaleMetrics.redisStock}</span>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-emerald-400 uppercase tracking-wider block">Remaining in Redis</span>
-                    <span className="text-xl font-bold text-emerald-400 font-mono">{selectedSaleMetrics.remainingStock}</span>
+                  <div className="bg-[#171924] border border-[#232738] p-4 rounded-xl">
+                    <span className="text-[10px] text-gray-400 block font-mono">RESERVED ORDERS</span>
+                    <span className="text-xl font-mono font-extrabold text-cyan-400">{selectedSaleMetrics.reservedCount}</span>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-amber-400 uppercase tracking-wider block">Active Reserved</span>
-                    <span className="text-xl font-bold text-amber-400 font-mono">{selectedSaleMetrics.reservedOrders}</span>
+                  <div className="bg-[#171924] border border-[#232738] p-4 rounded-xl">
+                    <span className="text-[10px] text-gray-400 block font-mono">PAID ORDERS</span>
+                    <span className="text-xl font-mono font-extrabold text-emerald-400">{selectedSaleMetrics.paidCount}</span>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-cyan-400 uppercase tracking-wider block">Paid / Confirmed</span>
-                    <span className="text-xl font-bold text-cyan-400 font-mono">{selectedSaleMetrics.paidOrders}</span>
+                  <div className="bg-[#171924] border border-[#232738] p-4 rounded-xl">
+                    <span className="text-[10px] text-gray-400 block font-mono">EXPIRED ORDERS</span>
+                    <span className="text-xl font-mono font-extrabold text-gray-400">{selectedSaleMetrics.expiredCount}</span>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-red-400 uppercase tracking-wider block">Expired / Cancelled</span>
-                    <span className="text-xl font-bold text-red-400 font-mono">{selectedSaleMetrics.expiredOrders + selectedSaleMetrics.cancelledOrders}</span>
+                  <div className="bg-[#171924] border border-[#232738] p-4 rounded-xl">
+                    <span className="text-[10px] text-gray-400 block font-mono">GROSS REVENUE</span>
+                    <span className="text-xl font-mono font-extrabold text-white">₹{selectedSaleMetrics.revenue}</span>
                   </div>
                 </div>
               )}
 
               {/* Schedule New Sale Form */}
-              <div className="bg-[#171924] border border-[#232738] p-5 rounded-xl">
-                <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-                  <Calendar size={16} className="text-amber-400" />
-                  Schedule a New Flash Sale (A3)
-                </h3>
-                <form onSubmit={handleCreateSale} className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+              <div className="bg-[#171924] border border-[#232738] rounded-xl p-5">
+                <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider mb-4">Schedule New Flash Sale (A3)</h4>
+                <form onSubmit={handleScheduleSale} className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
                   <div>
-                    <label className="text-gray-400 block mb-1">Target Product</label>
+                    <label className="text-gray-400 block mb-1">Select Product</label>
                     <select
                       value={newSale.productId}
                       onChange={e => setNewSale({ ...newSale, productId: e.target.value })}
                       required
                       className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
                     >
-                      <option value="">Select a product...</option>
+                      <option value="">-- Choose Product --</option>
                       {products.map(p => (
                         <option key={p.id} value={p.id}>{p.name} (₹{p.price})</option>
                       ))}
@@ -307,19 +367,20 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
                     <label className="text-gray-400 block mb-1">Sale Event Title</label>
                     <input
                       type="text"
-                      placeholder="e.g. Midnight Lightning Drop"
+                      placeholder="e.g. Midnight Cyber Drop #1"
                       value={newSale.title}
                       onChange={e => setNewSale({ ...newSale, title: e.target.value })}
                       required
                       className="w-full bg-[#1e2130] border border-[#2d3248] rounded-lg px-3 py-2 text-white"
-                    />
+                    >
+                    </input>
                   </div>
                   <div>
-                    <label className="text-gray-400 block mb-1">Sale Price (₹)</label>
+                    <label className="text-gray-400 block mb-1">Sale Flash Price (₹)</label>
                     <input
                       type="number"
                       step="0.01"
-                      placeholder="39999"
+                      placeholder="e.g. 39999.00"
                       value={newSale.salePrice}
                       onChange={e => setNewSale({ ...newSale, salePrice: e.target.value })}
                       required
@@ -348,10 +409,9 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="text-gray-400 block mb-1">Stock Allocation</label>
+                      <label className="text-gray-400 block mb-1">Stock Alloc.</label>
                       <input
                         type="number"
-                        min="1"
                         value={newSale.stockAllocation}
                         onChange={e => setNewSale({ ...newSale, stockAllocation: e.target.value })}
                         required
@@ -362,7 +422,6 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
                       <label className="text-gray-400 block mb-1">Per-User Limit</label>
                       <input
                         type="number"
-                        min="1"
                         value={newSale.perUserLimit}
                         onChange={e => setNewSale({ ...newSale, perUserLimit: e.target.value })}
                         required
@@ -374,27 +433,29 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
                     <button
                       type="submit"
                       disabled={loading}
-                      className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-lg transition-colors"
+                      className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-lg"
                     >
-                      Schedule Flash Sale
+                      Schedule Sale Event
                     </button>
                   </div>
                 </form>
               </div>
 
-              {/* Existing Sales Table */}
+              {/* Sales List Table */}
               <div className="bg-[#171924] border border-[#232738] rounded-xl overflow-hidden">
                 <div className="px-5 py-3 border-b border-[#232738] flex justify-between items-center">
-                  <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">All Scheduled Sales (A4)</h4>
+                  <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Scheduled & Active Flash Sales</h4>
+                  <span className="text-xs text-gray-400 font-mono">Total: {sales.length}</span>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-[#141620] text-gray-400 border-b border-[#232738]">
                       <tr>
                         <th className="p-3">ID</th>
-                        <th className="p-3">Title / Product</th>
+                        <th className="p-3">Title</th>
+                        <th className="p-3">Product</th>
                         <th className="p-3">Price</th>
-                        <th className="p-3">Stock Left</th>
+                        <th className="p-3">Allocation</th>
                         <th className="p-3">Status</th>
                         <th className="p-3">Window</th>
                         <th className="p-3 text-right">Actions</th>
@@ -402,47 +463,38 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
                     </thead>
                     <tbody className="divide-y divide-[#232738]">
                       {sales.map(s => (
-                        <tr key={s.id} className="hover:bg-[#1e2130] transition-colors">
+                        <tr key={s.id} className="hover:bg-[#1e2130] transition-colors cursor-pointer" onClick={() => fetchMetrics(s.id)}>
                           <td className="p-3 font-mono text-gray-400">#{s.id}</td>
-                          <td className="p-3 font-semibold text-white">
-                            <div>{s.title}</div>
-                            <div className="text-[10px] text-gray-400">{s.productName}</div>
-                          </td>
-                          <td className="p-3 text-emerald-400 font-mono">₹{s.salePrice}</td>
-                          <td className="p-3 font-mono">
-                            <span className="text-amber-400 font-bold">{s.remainingStock}</span> / {s.stockAllocation}
-                          </td>
+                          <td className="p-3 font-semibold text-white">{s.title}</td>
+                          <td className="p-3 text-gray-300">{s.product?.name}</td>
+                          <td className="p-3 font-mono text-emerald-400">₹{s.salePrice}</td>
+                          <td className="p-3 font-mono text-amber-400">{s.stockAllocation}</td>
                           <td className="p-3">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
                               s.status === 'LIVE' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
-                              s.status === 'SCHEDULED' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' :
-                              'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+                              s.status === 'SCHEDULED' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                              s.status === 'ENDED' ? 'bg-gray-500/20 text-gray-400 border border-gray-500/30' :
+                              'bg-amber-500/20 text-amber-400 border border-amber-500/30'
                             }`}>
                               {s.status}
                             </span>
                           </td>
-                          <td className="p-3 text-[10px] text-gray-400">
+                          <td className="p-3 text-[10px] text-gray-400 font-mono">
                             {new Date(s.startTime).toLocaleTimeString()} - {new Date(s.endTime).toLocaleTimeString()}
                           </td>
                           <td className="p-3 text-right space-x-2">
-                            <button
-                              onClick={() => fetchMetrics(s.id)}
-                              className="px-2 py-1 rounded bg-[#2b2f44] hover:bg-[#373c57] text-gray-300 text-[11px]"
-                            >
-                              Metrics
-                            </button>
                             {s.status === 'SCHEDULED' && (
                               <button
-                                onClick={() => handleStatusChange(s.id, 'LIVE')}
-                                className="px-2 py-1 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 text-[11px] font-semibold"
+                                onClick={(e) => { e.stopPropagation(); handleUpdateStatus(s.id, 'LIVE'); }}
+                                className="px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 text-[10px] font-mono border border-emerald-500/30"
                               >
-                                Go Live
+                                Force LIVE
                               </button>
                             )}
                             {s.status === 'LIVE' && (
                               <button
-                                onClick={() => handleStatusChange(s.id, 'ENDED')}
-                                className="px-2 py-1 rounded bg-red-500/20 text-red-300 hover:bg-red-500/30 text-[11px] font-semibold"
+                                onClick={(e) => { e.stopPropagation(); handleUpdateStatus(s.id, 'ENDED'); }}
+                                className="px-2 py-1 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 text-[10px] font-mono border border-red-500/30"
                               >
                                 End Sale
                               </button>
@@ -460,11 +512,9 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
           {/* TAB: PRODUCTS */}
           {activeTab === 'products' && (
             <div className="space-y-6">
-              <div className="bg-[#171924] border border-[#232738] p-5 rounded-xl">
-                <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-                  <Package size={16} className="text-amber-400" />
-                  Create New Product (A2)
-                </h3>
+              {/* Create Product Form */}
+              <div className="bg-[#171924] border border-[#232738] rounded-xl p-5">
+                <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider mb-4">Add Product to Catalog (A2)</h4>
                 <form onSubmit={handleCreateProduct} className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                   <div>
                     <label className="text-gray-400 block mb-1">Product Name</label>
@@ -548,7 +598,17 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
               <div className="bg-[#171924] border border-[#232738] rounded-xl overflow-hidden">
                 <div className="px-5 py-3 border-b border-[#232738] flex justify-between items-center">
                   <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">All Customer Orders & Refunds (A6)</h4>
-                  <span className="text-xs text-gray-400 font-mono">Total Orders: {orders.length}</span>
+                  <div className="flex items-center gap-3">
+                    <a
+                      href={`${CORE_API}/api/v1/admin/orders/export`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                    >
+                      <Download size={14} /> Export CSV (A6)
+                    </a>
+                    <span className="text-xs text-gray-400 font-mono">Total Orders: {orders.length}</span>
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
@@ -565,8 +625,8 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
                     </thead>
                     <tbody className="divide-y divide-[#232738]">
                       {orders.map(o => (
-                        <tr key={o.id} className="hover:bg-[#1e2130] transition-colors">
-                          <td className="p-3 font-mono text-gray-400">{o.id.slice(0, 8)}...</td>
+                        <tr key={o.orderId || o.id} className="hover:bg-[#1e2130] transition-colors">
+                          <td className="p-3 font-mono text-gray-400">{(o.orderId || o.id).slice(0, 8)}...</td>
                           <td className="p-3 font-semibold text-white">{o.productName}</td>
                           <td className="p-3 text-gray-400 font-mono">User #{o.userId}</td>
                           <td className="p-3 font-mono text-emerald-400">₹{o.totalAmount}</td>
@@ -586,7 +646,7 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
                           <td className="p-3 text-right">
                             {o.status === 'PAID' ? (
                               <button
-                                onClick={() => handleRefund(o.id)}
+                                onClick={() => handleRefund(o.orderId || o.id)}
                                 className="px-3 py-1 rounded bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 text-[11px] font-semibold border border-purple-500/30"
                               >
                                 Refund (A6)
@@ -599,6 +659,134 @@ export default function AdminDashboard({ user, token, onClose, onRefreshStorefro
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: RECONCILIATION & RECOVERY (S5, S6, S7) */}
+          {activeTab === 'reconciliation' && (
+            <div className="space-y-6">
+              {/* S5 Reconciliation Table */}
+              <div className="bg-[#171924] border border-[#232738] rounded-xl overflow-hidden">
+                <div className="px-5 py-3 border-b border-[#232738] flex justify-between items-center">
+                  <div className="flex items-center gap-2">
+                    <Database size={16} className="text-amber-400" />
+                    <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
+                      Inventory Invariant Reconciliation (S5)
+                    </h4>
+                  </div>
+                  <button
+                    onClick={fetchReconciliationReports}
+                    className="px-3 py-1 rounded bg-[#1e2130] text-gray-300 hover:text-white border border-[#2d3248] text-xs flex items-center gap-1.5"
+                  >
+                    <RefreshCw size={12} /> Audit Invariants Now
+                  </button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#141620] text-gray-400 border-b border-[#232738]">
+                      <tr>
+                        <th className="p-3">Sale ID</th>
+                        <th className="p-3">Event Title</th>
+                        <th className="p-3">Initial Stock</th>
+                        <th className="p-3">Live Redis Stock</th>
+                        <th className="p-3">DB Reserved</th>
+                        <th className="p-3">DB Paid</th>
+                        <th className="p-3">Drift</th>
+                        <th className="p-3">Invariant Check</th>
+                        <th className="p-3 text-right">S6 Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#232738]">
+                      {reconciliationReports.map(rep => (
+                        <tr key={rep.saleId} className="hover:bg-[#1e2130]">
+                          <td className="p-3 font-mono text-gray-400">#{rep.saleId}</td>
+                          <td className="p-3 font-semibold text-white">{rep.saleTitle}</td>
+                          <td className="p-3 font-mono">{rep.initialStock}</td>
+                          <td className="p-3 font-mono text-amber-400 font-bold">{rep.redisStock}</td>
+                          <td className="p-3 font-mono text-cyan-400">{rep.reservedCount}</td>
+                          <td className="p-3 font-mono text-emerald-400">{rep.paidCount}</td>
+                          <td className="p-3 font-mono">
+                            <span className={rep.drift === 0 ? 'text-gray-400' : 'text-red-400 font-bold'}>
+                              {rep.drift}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            {rep.isConsistent ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 w-fit">
+                                <CheckCircle2 size={12} /> Invariant Conserved
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1 w-fit">
+                                <AlertTriangle size={12} /> Drift Detected
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            <button
+                              onClick={() => handleRebuildRedis(rep.saleId)}
+                              className="px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-[11px] font-semibold border border-amber-500/30 flex items-center gap-1 ml-auto"
+                            >
+                              <RotateCcw size={12} /> Rebuild Redis (S6)
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* S7 Kafka Dead-Letter Topic (DLT) & Replay */}
+              <div className="bg-[#171924] border border-[#232738] rounded-xl p-5">
+                <div className="flex justify-between items-center mb-4">
+                  <div className="flex items-center gap-2">
+                    <Activity size={16} className="text-cyan-400" />
+                    <div>
+                      <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
+                        Kafka Dead-Letter Handling & Replay (S7)
+                      </h4>
+                      <p className="text-[11px] text-gray-400">
+                        Topic: <span className="font-mono text-amber-400">order_events.DLT</span> | Unprocessed or Poison Pill Messages
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={fetchDltMessages}
+                      className="px-3 py-1.5 rounded-lg bg-[#1e2130] text-gray-300 hover:text-white border border-[#2d3248] text-xs"
+                    >
+                      Refresh DLT
+                    </button>
+                    <button
+                      onClick={handleReplayDlt}
+                      disabled={dltMessages.length === 0}
+                      className="px-4 py-1.5 rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Play size={12} /> Admin DLT Replay
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-[#141620] border border-[#202436] rounded-xl">
+                  {dltMessages.length === 0 ? (
+                    <div className="text-center py-6 text-gray-500 text-xs">
+                      <CheckCircle2 size={24} className="mx-auto mb-2 text-emerald-500/60" />
+                      DLT queue is clean. Zero failed or poison pill messages pending replay.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <span className="text-[11px] text-amber-400 font-mono font-bold block mb-2">
+                        {dltMessages.length} Failed Message(s) in DLT:
+                      </span>
+                      {dltMessages.map((msg, idx) => (
+                        <div key={idx} className="p-2.5 bg-[#1a1c2a] rounded-lg font-mono text-[10px] text-gray-300 overflow-x-auto border border-[#2a2e44]">
+                          {msg}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

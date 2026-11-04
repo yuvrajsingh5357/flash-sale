@@ -33,6 +33,7 @@ export default function App() {
   const [reservationTimeLeft, setReservationTimeLeft] = useState(null);
   const [shippingAddress, setShippingAddress] = useState('Flat 402, Highrise Tower, Bangalore, KA - 560001');
   const [paying, setPaying] = useState(false);
+  const [paymentProvider, setPaymentProvider] = useState('MOCK'); // 'MOCK' | 'RAZORPAY'
   const [simulateFail, setSimulateFail] = useState(false);
   const [orderConfirmed, setOrderConfirmed] = useState(false);
 
@@ -283,6 +284,78 @@ export default function App() {
       }
     } catch {
       addToast('Network error processing payment', 'error');
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  // 5b. Razorpay Gateway Flow (C6 P1, S2 P0 Webhook Deduplication)
+  const handleRazorpayPay = async () => {
+    if (!activeOrder) return;
+    setPaying(true);
+
+    try {
+      // Step 1: Create Razorpay Order
+      const createRes = await fetch(`${CORE_API}/api/v1/payments/razorpay/create-order`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ orderId: activeOrder.orderId })
+      });
+
+      if (!createRes.ok) {
+        const err = await createRes.json();
+        addToast(err.message || 'Failed to initiate Razorpay order', 'error');
+        setPaying(false);
+        return;
+      }
+
+      const rzpData = await createRes.json();
+      const razorpayOrderId = rzpData.razorpayOrderId;
+      const amountInPaise = rzpData.amountInPaise;
+
+      // Step 2: Simulate Razorpay Webhook Callback (S2)
+      const eventId = `evt_${crypto.randomUUID()}`;
+      const paymentId = `pay_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`;
+
+      const webhookPayload = JSON.stringify({
+        id: eventId,
+        event: 'payment.captured',
+        created_at: Math.floor(Date.now() / 1000),
+        payload: {
+          payment: {
+            entity: {
+              id: paymentId,
+              order_id: razorpayOrderId,
+              amount: amountInPaise,
+              currency: 'INR',
+              status: 'captured'
+            }
+          }
+        }
+      });
+
+      const webhookRes = await fetch(`${CORE_API}/api/v1/payments/webhook/razorpay`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Razorpay-Signature': 'mock_signature_valid'
+        },
+        body: webhookPayload
+      });
+
+      if (webhookRes.ok) {
+        setActiveOrder(prev => ({ ...prev, status: 'PAID' }));
+        setOrderConfirmed(true);
+        addToast('Razorpay Payment Captured & Verified via S2 Webhook!', 'success', 8000);
+        loadPublicSales();
+      } else {
+        addToast('Razorpay webhook verification failed', 'error');
+      }
+    } catch {
+      addToast('Network error processing Razorpay payment', 'error');
     } finally {
       setPaying(false);
     }
@@ -624,40 +697,79 @@ export default function App() {
                   />
                 </div>
 
-                {/* Payment Simulation Toggle (C6, C10) */}
-                <div className="p-3 bg-[#181b28] border border-[#2b3046] rounded-xl flex items-center justify-between text-xs">
-                  <div>
-                    <span className="font-semibold text-white block">Mock Gateway Mode</span>
-                    <span className="text-[11px] text-gray-400">Toggle to test payment failure & retry (C10)</span>
+                {/* Payment Provider Selection (C6 P0 / P1) */}
+                <div>
+                  <label className="text-xs text-gray-400 block mb-2 font-semibold">Payment Method</label>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentProvider('MOCK')}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        paymentProvider === 'MOCK'
+                          ? 'border-amber-400 bg-amber-500/10 text-white'
+                          : 'border-[#282d42] bg-[#181b28] text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="font-bold block">Instant Mock Gateway</span>
+                      <span className="text-[10px] text-gray-400">Direct simulated payment (P0)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentProvider('RAZORPAY')}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        paymentProvider === 'RAZORPAY'
+                          ? 'border-cyan-400 bg-cyan-500/10 text-white'
+                          : 'border-[#282d42] bg-[#181b28] text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="font-bold block text-cyan-400">Razorpay Gateway (P1)</span>
+                      <span className="text-[10px] text-gray-400">Order + S2 Webhook dedupe</span>
+                    </button>
                   </div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <span className={`text-[10px] font-mono font-bold ${simulateFail ? 'text-red-400' : 'text-emerald-400'}`}>
-                      {simulateFail ? 'FAIL' : 'SUCCESS'}
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={simulateFail}
-                      onChange={e => setSimulateFail(e.target.checked)}
-                      className="toggle-checkbox"
-                    />
-                  </label>
                 </div>
+
+                {/* Mock Failure Toggle (only if MOCK selected) */}
+                {paymentProvider === 'MOCK' && (
+                  <div className="p-3 bg-[#181b28] border border-[#2b3046] rounded-xl flex items-center justify-between text-xs">
+                    <div>
+                      <span className="font-semibold text-white block">Mock Simulation Mode</span>
+                      <span className="text-[11px] text-gray-400">Toggle to test payment failure & retry (C10)</span>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <span className={`text-[10px] font-mono font-bold ${simulateFail ? 'text-red-400' : 'text-emerald-400'}`}>
+                        {simulateFail ? 'FAIL' : 'SUCCESS'}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={simulateFail}
+                        onChange={e => setSimulateFail(e.target.checked)}
+                        className="toggle-checkbox"
+                      />
+                    </label>
+                  </div>
+                )}
 
                 {/* Actions */}
                 <div className="space-y-2 pt-2">
                   <button
-                    onClick={handlePay}
+                    onClick={paymentProvider === 'MOCK' ? handlePay : handleRazorpayPay}
                     disabled={paying || reservationTimeLeft <= 0}
-                    className="w-full py-3.5 px-4 bg-emerald-500 hover:bg-emerald-600 text-black font-display font-extrabold text-base rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-all"
+                    className={`w-full py-3.5 px-4 text-black font-display font-extrabold text-base rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all ${
+                      paymentProvider === 'RAZORPAY'
+                        ? 'bg-cyan-400 hover:bg-cyan-500 shadow-cyan-500/20'
+                        : 'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/20'
+                    }`}
                   >
                     {paying ? (
                       <>
                         <Loader2 size={18} className="animate-spin" />
-                        <span>Verifying Payment...</span>
+                        <span>Verifying with Gateway...</span>
                       </>
                     ) : (
                       <>
-                        <span>Pay ₹{activeOrder.totalAmount} ({simulateFail ? 'Mock Fail' : 'Mock Success'})</span>
+                        <span>
+                          Pay ₹{activeOrder.totalAmount} via {paymentProvider === 'RAZORPAY' ? 'Razorpay (S2)' : `Mock (${simulateFail ? 'Fail' : 'Success'})`}
+                        </span>
                       </>
                     )}
                   </button>
